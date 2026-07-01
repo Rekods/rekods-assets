@@ -250,3 +250,203 @@
       publish({ country: null, tier: "developed", currency: "USD", source: "fallback" });
     });
 })();
+
+/* =====================================================================
+ * C. CURRENCY CONVERSION  (spec 7.1 steps 4-5 / 10)
+ *
+ * Converts USD prices (read from window.REKODS_PRICING by the caller) into
+ * the visitor's local currency for DISPLAY only. Rekods bills in USD.
+ *
+ * TRACEABILITY: this module never contains a price. Its only numeric price
+ * input is a USD amount the caller reads from window.REKODS_PRICING. It
+ * multiplies that by a live FX rate and formats it. The only data here that
+ * is NOT from the config is (a) the live FX rates (multipliers fetched from
+ * the API, not prices) and (b) per-currency display rules (decimal places;
+ * the symbol comes from Intl). No price number is duplicated anywhere.
+ *
+ * Public API:
+ *   window.rekodsConvert(usd)  -> { amount, currency, rate, converted }
+ *   window.rekodsMoney(usd)    -> formatted local-currency string
+ *   window.rekodsBillingNote() -> the "billed in USD" line ('' when USD)
+ * Fires "rekods:fx-ready" once rates load (or fail). Re-render prices on both
+ * "rekods:fx-ready" and "rekods:region-ready" (currency can change).
+ * ===================================================================== */
+(function () {
+  "use strict";
+
+  var FX_KEY = "rekods_fx";
+  var FX_TTL = 24 * 60 * 60 * 1000;                     // 24 hours
+  var FX_URL = "https://open.er-api.com/v6/latest/USD"; // free, no key, USD base
+
+  // Currencies displayed with 0 decimals (large denominations). Others: 2.
+  var ZERO_DEC = { NGN:1, IDR:1, VND:1, PKR:1, KES:1, INR:1, PHP:1 };
+
+  var rates = null;  // { EUR:0.92, NGN:1600, ... } once loaded; null until then
+
+  function decimals(cur) { return ZERO_DEC[cur] ? 0 : 2; }
+
+  function rateFor(cur) {
+    if (cur === "USD") return 1;
+    if (rates && typeof rates[cur] === "number") return rates[cur];
+    return null;  // unknown/unavailable -> caller falls back to USD
+  }
+
+  // Convert a USD amount to the ACTIVE currency (window.REKODS_REGION), rounded.
+  window.rekodsConvert = function (usd) {
+    var region = window.REKODS_REGION || {};
+    var cur = region.currency || "USD";
+    var rate = rateFor(cur);
+    if (rate === null) { cur = "USD"; rate = 1; }        // FX missing -> show USD
+    var dp = decimals(cur);
+    var f = Math.pow(10, dp);
+    var amount = Math.round(usd * rate * f) / f;
+    return { amount: amount, currency: cur, rate: rate, converted: cur !== "USD" };
+  };
+
+  // Format a USD amount as a local-currency string (symbol + grouping via Intl).
+  // Whole amounts drop the decimals ("$300"); fractional amounts keep the
+  // currency's places ("$4.50", "€7.36"). Big-denomination currencies (dp 0)
+  // are always whole ("₦480,000").
+  window.rekodsMoney = function (usd) {
+    var c = window.rekodsConvert(usd);
+    var dp = decimals(c.currency);
+    var hasFraction = Math.abs(c.amount % 1) > 1e-9;
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: "currency",
+        currency: c.currency,
+        minimumFractionDigits: hasFraction ? dp : 0,
+        maximumFractionDigits: dp
+      }).format(c.amount);
+    } catch (e) {
+      return c.currency + " " + c.amount;                // Intl unavailable
+    }
+  };
+
+  // Required "billed in USD" reference line (spec 7.1). Empty when already USD.
+  window.rekodsBillingNote = function () {
+    var region = window.REKODS_REGION || {};
+    var cur = region.currency || "USD";
+    if (cur === "USD" || rateFor(cur) === null) return "";
+    return "Shown in " + cur + " at today’s exchange rate, for reference. " +
+           "You’ll be billed in USD.";
+  };
+
+  function announce(detail) {
+    try { document.dispatchEvent(new CustomEvent("rekods:fx-ready", { detail: detail })); }
+    catch (e) {}
+  }
+
+  // Load rates: 24h cache first (localStorage), else fetch once and cache.
+  (function loadFX() {
+    try {
+      var cached = JSON.parse(localStorage.getItem(FX_KEY) || "null");
+      if (cached && cached.rates && cached.ts && (Date.now() - cached.ts) < FX_TTL) {
+        rates = cached.rates;
+        announce({ cached: true });
+        return;
+      }
+    } catch (e) {}
+
+    fetch(FX_URL)
+      .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+      .then(function (data) {
+        if (!data || !data.rates) throw new Error("no rates");
+        rates = data.rates;
+        try {
+          localStorage.setItem(FX_KEY, JSON.stringify({ rates: rates, ts: Date.now() }));
+        } catch (e) {}
+        announce({ cached: false });
+      })
+      .catch(function () {
+        // FX unavailable -> rates stay null -> everything displays in USD (safe).
+        announce({ error: true });
+      });
+  })();
+})();
+
+/* =====================================================================
+ * D. PRICING PLAN CARDS + BILLING TOGGLE  (spec 7.1)
+ *
+ * Fills the price slots in the /pricing plan-summary section from
+ * window.REKODS_PRICING (via rekodsMoney), wires the Monthly/Annual toggle,
+ * and re-renders whenever the region or FX rate changes.
+ *   Annual = monthly x 12 x (1 - annualDiscount), derived from the config.
+ *   Enterprise is fixed ("Custom pricing. Annual billing only.") and never
+ *   responds to the toggle. Every number traces to REKODS_PRICING.
+ * ===================================================================== */
+(function () {
+  "use strict";
+  var root = document.querySelector("[data-pricing-summary]");
+  if (!root) return;
+
+  var billing = "monthly";  // default state
+
+  function annualFactor() {
+    var disc = (window.REKODS_PRICING && window.REKODS_PRICING.annualDiscount) || 0;
+    return 12 * (1 - disc);
+  }
+  function money(usd) {
+    return (typeof window.rekodsMoney === "function") ? window.rekodsMoney(usd) : ("$" + usd);
+  }
+  function regionLine() {
+    var reg = window.REKODS_REGION || {};
+    var cur = reg.currency || "USD";
+    var name = null;
+    if (reg.country) {
+      try { name = new Intl.DisplayNames(undefined, { type: "region" }).of(reg.country); } catch (e) {}
+    }
+    return name ? ("Pricing shown for " + name + " (" + cur + ")")
+                : ("Prices shown in " + cur);
+  }
+  function setSlot(card, slot, text) {
+    var el = card.querySelector('[data-slot="' + slot + '"]');
+    if (el) el.textContent = text;
+  }
+
+  function renderCard(card) {
+    var plan = card.getAttribute("data-plan");
+    if (plan === "enterprise") return;   // fixed copy, ignores the toggle
+    var pricing = window.REKODS_PRICING;
+    var tier = (window.REKODS_REGION || {}).tier || "developed";
+    var base = pricing && pricing[plan] && pricing[plan][tier];
+    if (!base) return;
+
+    var annual = billing === "annual";
+    var f = annual ? annualFactor() : 1;
+    setSlot(card, "platform", money(base.platform * f));
+    setSlot(card, "platform-suffix", annual ? "/yr platform fee" : "/mo platform fee");
+    setSlot(card, "perstudent", money(base.perStudent * f));
+    setSlot(card, "perstudent-suffix", annual ? "/student/yr" : "/student/mo");
+
+    var badge = card.querySelector('[data-slot="save-badge"]');
+    if (badge) badge.style.display = annual ? "" : "none";
+
+    var note = card.querySelector('[data-slot="billing-note"]');
+    if (note) note.textContent =
+      (typeof window.rekodsBillingNote === "function") ? window.rekodsBillingNote() : "";
+  }
+
+  function render() {
+    var line = root.querySelector("[data-region-line]");
+    if (line) line.textContent = regionLine();
+    [].forEach.call(root.querySelectorAll("[data-plan]"), renderCard);
+  }
+
+  // Wire the Monthly / Annual toggle.
+  [].forEach.call(root.querySelectorAll("[data-billing]"), function (btn) {
+    btn.addEventListener("click", function () {
+      billing = btn.getAttribute("data-billing");
+      [].forEach.call(root.querySelectorAll("[data-billing]"), function (b) {
+        var on = b === btn;
+        b.classList.toggle("psum-toggle-on", on);
+        b.setAttribute("aria-pressed", on ? "true" : "false");
+      });
+      render();
+    });
+  });
+
+  render();  // initial paint (defaults until region/FX resolve)
+  document.addEventListener("rekods:region-ready", render);
+  document.addEventListener("rekods:fx-ready", render);
+})();
