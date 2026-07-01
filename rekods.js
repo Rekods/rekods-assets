@@ -451,3 +451,47 @@
   document.addEventListener("rekods:region-ready", render);
   document.addEventListener("rekods:fx-ready", render);
 })();
+
+/* =====================================================================
+ * E. INLINE PRICE SLOTS (e.g. the homepage pricing cards)  (spec 7.0)
+ *
+ * Fills any element tagged [data-rk-plan][data-rk-part] with a monthly,
+ * region-converted price derived from window.REKODS_PRICING, so prices
+ * shown anywhere on the site stay in sync with the one config.
+ *   data-rk-part="platform"    -> the platform amount
+ *   data-rk-part="perstudent"  -> "+ <amount> / student / mo"
+ *   data-rk-from (optional)    -> prefixes "From "/"from " (Enterprise)
+ * ===================================================================== */
+(function () {
+  "use strict";
+  var slots = document.querySelectorAll("[data-rk-plan][data-rk-part]");
+  if (!slots.length) return;
+
+  function money(usd) {
+    return (typeof window.rekodsMoney === "function") ? window.rekodsMoney(usd) : ("$" + usd);
+  }
+  function render() {
+    var pricing = window.REKODS_PRICING;
+    if (!pricing) return;
+    var tier = (window.REKODS_REGION || {}).tier || "developed";
+    [].forEach.call(slots, function (el) {
+      var plan = el.getAttribute("data-rk-plan");
+      var part = el.getAttribute("data-rk-part");
+      if (plan === "enterprise") {              // custom-quoted, no computed numbers
+        if (part === "platform") el.textContent = "Custom pricing";
+        return;
+      }
+      var from = el.hasAttribute("data-rk-from");
+      var base = pricing[plan] && pricing[plan][tier];
+      if (!base) return;
+      if (part === "platform") {
+        el.textContent = (from ? "From " : "") + money(base.platform);
+      } else if (part === "perstudent") {
+        el.textContent = "+ " + (from ? "from " : "") + money(base.perStudent) + " / student / mo";
+      }
+    });
+  }
+  render();
+  document.addEventListener("rekods:region-ready", render);
+  document.addEventListener("rekods:fx-ready", render);
+})();
