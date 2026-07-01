@@ -424,8 +424,11 @@
     if (badge) badge.style.display = annual ? "" : "none";
 
     var note = card.querySelector('[data-slot="billing-note"]');
-    if (note) note.textContent =
-      (typeof window.rekodsBillingNote === "function") ? window.rekodsBillingNote() : "";
+    if (note) {
+      var noteText = (typeof window.rekodsBillingNote === "function") ? window.rekodsBillingNote() : "";
+      note.textContent = noteText;
+      note.style.display = noteText ? "block" : "none";   // hide when in USD
+    }
   }
 
   function render() {
@@ -494,4 +497,80 @@
   render();
   document.addEventListener("rekods:region-ready", render);
   document.addEventListener("rekods:fx-ready", render);
+})();
+
+/* =====================================================================
+ * F. CURRENCY BILLING DISCLAIMER  (spec 7.1)
+ *
+ * Fills every element tagged [data-rk-billing-note] with the required
+ * "Shown in <CUR> at today's exchange rate, for reference. You'll be
+ * billed in USD." line — wherever a converted price appears on the site.
+ * Auto-hides when the visitor is already in USD (rekodsBillingNote() → "").
+ * Drop [data-rk-billing-note] near any converted price and it just works.
+ * ===================================================================== */
+(function () {
+  "use strict";
+  var notes = document.querySelectorAll("[data-rk-billing-note]");
+  if (!notes.length) return;
+  function render() {
+    var text = (typeof window.rekodsBillingNote === "function") ? window.rekodsBillingNote() : "";
+    [].forEach.call(notes, function (el) {
+      el.textContent = text;
+      el.style.display = text ? "block" : "none";
+    });
+  }
+  render();
+  document.addEventListener("rekods:region-ready", render);
+  document.addEventListener("rekods:fx-ready", render);
+})();
+
+/* =====================================================================
+ * G. PAYMENT MARGIN FIGURES (feature table)  (spec 7.0 / 7.3)
+ *
+ * Renders the processing-margin figures in the detailed feature table from
+ * window.REKODS_PRICING.paymentMargin, so they trace to the one config like
+ * every other price. Cells use [data-rk-margin-cell]; the inline references
+ * in the benefit sentence use [data-rk-margin-desc]. These are USD/global
+ * (not region-converted). If the config field is absent, the markup
+ * fallback values are left untouched.
+ * ===================================================================== */
+(function () {
+  "use strict";
+  var cells = document.querySelectorAll("[data-rk-margin-cell]");
+  var descs = document.querySelectorAll("[data-rk-margin-desc]");
+  if (!cells.length && !descs.length) return;
+  var pm = window.REKODS_PRICING && window.REKODS_PRICING.paymentMargin;
+  if (!pm) return;
+  function fmtCell(m) { return m.pct + (m.cap != null ? " (capped $" + m.cap + ")" : ""); }
+  function fmtDesc(m) { return m.pct + (m.cap != null ? " capped at $" + m.cap : ""); }
+  [].forEach.call(cells, function (el) {
+    var m = pm[el.getAttribute("data-rk-margin-cell")];
+    if (m) el.textContent = fmtCell(m);
+  });
+  [].forEach.call(descs, function (el) {
+    var m = pm[el.getAttribute("data-rk-margin-desc")];
+    if (m) el.textContent = fmtDesc(m);
+  });
+})();
+
+/* =====================================================================
+ * H. MONEY-BACK GUARANTEE FIGURES  (spec 7.0 / 7.3 / 7.5)
+ *
+ * Fills [data-rk-guarantee-days] and [data-rk-guarantee-hours] from
+ * window.REKODS_PRICING (moneyBackGuaranteeDays / moneyBackGuaranteeHours),
+ * so the guarantee's "90 days" and "8 hours" trace to the one config.
+ * Global (not region-dependent); the markup values are no-JS fallbacks.
+ * ===================================================================== */
+(function () {
+  "use strict";
+  var pricing = window.REKODS_PRICING;
+  if (!pricing) return;
+  var days = document.querySelectorAll("[data-rk-guarantee-days]");
+  var hours = document.querySelectorAll("[data-rk-guarantee-hours]");
+  if (pricing.moneyBackGuaranteeDays != null) {
+    [].forEach.call(days, function (el) { el.textContent = pricing.moneyBackGuaranteeDays; });
+  }
+  if (pricing.moneyBackGuaranteeHours != null) {
+    [].forEach.call(hours, function (el) { el.textContent = pricing.moneyBackGuaranteeHours; });
+  }
 })();
