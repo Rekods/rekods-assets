@@ -315,6 +315,7 @@
       return new Intl.NumberFormat(undefined, {
         style: "currency",
         currency: c.currency,
+        currencyDisplay: "narrowSymbol",   // prefer ₦, GH₵, R… over the ISO code
         minimumFractionDigits: hasFraction ? dp : 0,
         maximumFractionDigits: dp
       }).format(c.amount);
