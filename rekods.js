@@ -188,7 +188,10 @@
    "JP","KR","TW","HK","MO","BN"].concat(EUROZONE).forEach(function (c) { DEV[c] = 1; });
 
   var KEY = "rekods_region";                                 // sessionStorage key
-  var TIMEOUT = 2500;                                          // ms before failing safe
+  var TIMEOUT = 4000;                                          // ms before failing safe
+  // NOTE: raised from 2500ms on 2026-08-06. The fallback is Developed/USD, so a
+  // lookup that times out shows an emerging-market school the HIGHER price.
+  // Better to wait a little longer than to quote the wrong region.
   var PROVIDER = "https://get.geojs.io/v1/ip/country.json";   // no-key IP geolocation
 
   // Resolve a country code to { country, tier, currency }.
@@ -529,27 +532,37 @@
  *
  * Renders the processing-margin figures in the detailed feature table from
  * window.REKODS_PRICING.paymentMargin, so they trace to the one config like
- * every other price. Cells use [data-rk-margin-cell]; the inline references
- * in the benefit sentence use [data-rk-margin-desc]. These are USD/global
- * (not region-converted). If the config field is absent, the markup
- * fallback values are left untouched.
+ * every other price. These are USD/global (not region-converted). If the
+ * config field is absent, the markup fallback values are left untouched.
+ *
+ * Hooks:
+ *   [data-rk-margin-cell="<plan>"]  -> the percentage, e.g. "0.5%"
+ *   [data-rk-margin-desc="<plan>"]  -> the percentage, inline in prose
+ *   [data-rk-margin-cap="<plan>"]   -> the cap alone, e.g. "$5"
+ *
+ * Every plan currently caps at the same $5, so the cap is stated ONCE in the
+ * row copy via [data-rk-margin-cap] rather than repeated in all three narrow
+ * columns. If the caps ever diverge per plan, put the cap back into fmtCell.
  * ===================================================================== */
 (function () {
   "use strict";
   var cells = document.querySelectorAll("[data-rk-margin-cell]");
   var descs = document.querySelectorAll("[data-rk-margin-desc]");
-  if (!cells.length && !descs.length) return;
+  var caps = document.querySelectorAll("[data-rk-margin-cap]");
+  if (!cells.length && !descs.length && !caps.length) return;
   var pm = window.REKODS_PRICING && window.REKODS_PRICING.paymentMargin;
   if (!pm) return;
-  function fmtCell(m) { return m.pct + (m.cap != null ? " (capped $" + m.cap + ")" : ""); }
-  function fmtDesc(m) { return m.pct + (m.cap != null ? " capped at $" + m.cap : ""); }
   [].forEach.call(cells, function (el) {
     var m = pm[el.getAttribute("data-rk-margin-cell")];
-    if (m) el.textContent = fmtCell(m);
+    if (m) el.textContent = m.pct;
   });
   [].forEach.call(descs, function (el) {
     var m = pm[el.getAttribute("data-rk-margin-desc")];
-    if (m) el.textContent = fmtDesc(m);
+    if (m) el.textContent = m.pct;
+  });
+  [].forEach.call(caps, function (el) {
+    var m = pm[el.getAttribute("data-rk-margin-cap")];
+    if (m && m.cap != null) el.textContent = "$" + m.cap;
   });
 })();
 
